@@ -29,7 +29,6 @@ class FoM:
         self.frequency_window = np.sin(np.pi*self.xs)**4
         # Beam Intensity
         self.BeamPath = beam_file_path
-        self.Beam = loadmat('{:s}/u_freq_cube_hirax.mat'.format(self.BeamPath))['U_FreqCube']
         self.BeamErr = self.Beam*0.2
         self.fft_coordinates()
 
@@ -49,6 +48,11 @@ class FoM:
         # Projected beam coordinates in Fourier space (x_fft, y_fft) = (ell_x, ell_y)
         self.x_fft_coords = fftshift(fftfreq(x_coords.size, d=x_res))
         self.y_fft_coords = fftshift(fftfreq(y_coords.size, d=y_res))
+
+        Beam = loadmat('{:s}/u_freq_cube_hirax.mat'.format(self.BeamPath))['U_FreqCube']
+        BeamErr = Beam * 0.2 # TBD
+        self.Beam = self.directional_window(Beam, x_coords, y_coords)
+        self.BeamErr = self.directional_window(BeamErr, x_coords, y_coords)
 
         Beam_fft = fftn(self.Beam, axes=(0, 1))
         Beam_err_fft = fftn(self.BeamErr, axes=(0, 1))
@@ -117,8 +121,23 @@ class FoM:
         T_sys = self.t_sys(self.frequencies)
         return np.diag((T_sys/np.abs(self.Beam_fft_shift[i, j])) ** 2 / (units.t_sidereal * self.ndays * bw))
 
+    def directional_window(self, Beam, x_coords, y_coords, theta_max=75., alpha=0.05):
+        def radian_to_degree(a):
+            return a*180./(2*np.pi)
 
-    def windowing(self, data_array):
+        for i in range(x_coords.size):
+            for j in range(y_coords.size):
+                theta = np.sqrt(radian_to_degree(x_coords[i])**2
+                                + radian_to_degree(y_coords[j])**2)
+                if theta > theta_max:
+                    Beam[i, j, :] = 0.
+                else:
+                    Beam[i, j, :] *= np.exp(-alpha*(1/(theta-theta_max)**2 - 1/theta_max**2))
+        return Beam
+
+
+
+    def spectral_window(self, data_array):
         sin_x = np.sin(self.xs * np.pi)
         W = np.outer(sin_x, sin_x)
         return data_array * W
@@ -129,15 +148,15 @@ class FoM:
     def P_ab_at_a_k_perp(self, i, j, SNR_only = False):
         k_perp = self.x_fft_coords[i] + 1j * self.y_fft_coords[j]
         cl_21 = self.clarray_21cm(k_perp)
-        P_ab_21 = self.Dct(self.windowing(cl_21))
+        P_ab_21 = self.Dct(self.spectral_window(cl_21))
         cl_fg = self.clarray_fg(k_perp)
-        P_ab_fg = self.Dct(self.windowing(cl_fg))
+        P_ab_fg = self.Dct(self.spectral_window(cl_fg))
         x2_grid, x1_grid = np.meshgrid(self.Fractional_beam_err[i, j].conj(), self.Fractional_beam_err[i, j])
         aux = (x2_grid + x1_grid + x2_grid * x1_grid) * (cl_21 + cl_fg)
-        P_ab_beam = self.Dct(self.windowing(aux))
+        P_ab_beam = self.Dct(self.spectral_window(aux))
         x2_grid, x1_grid = np.meshgrid(self.Beam_fft_shift[i, j].conj(), self.Beam_fft_shift[i, j])
         aux = self.ps_noise_ij(i, j) / (x2_grid * x1_grid)
-        P_ab_noise = self.Dct(self.windowing(aux))
+        P_ab_noise = self.Dct(self.spectral_window(aux))
         SNR = np.sum(np.abs(P_ab_21/(P_ab_fg + P_ab_beam + P_ab_noise)))
         if SNR_only:
             return SNR
@@ -147,13 +166,13 @@ class FoM:
     def SNR_at_a_k_perp(self, i, j):
         k_perp = self.x_fft_coords[i] + 1j * self.y_fft_coords[j]
         cl_21 = self.clarray_21cm(k_perp)
-        P_ab_21 = self.Dct(self.windowing(cl_21))
+        P_ab_21 = self.Dct(self.spectral_window(cl_21))
         cl_noise = self.clarray_fg(k_perp).astype(complex)
         x2_grid, x1_grid = np.meshgrid(self.Fractional_beam_err[i, j].conj(), self.Fractional_beam_err[i, j])
         cl_noise += (x2_grid + x1_grid + x2_grid * x1_grid) * (cl_21 + cl_noise)
         x2_grid, x1_grid = np.meshgrid(self.Beam_fft_shift[i, j].conj(), self.Beam_fft_shift[i, j])
         cl_noise += self.ps_noise_ij(i, j) / (x2_grid * x1_grid)
-        P_ab_noise = self.Dct(self.windowing(cl_noise))
+        P_ab_noise = self.Dct(self.spectral_window(cl_noise))
         return np.sum(np.abs(P_ab_21/P_ab_noise))
 
     def FoM(self):
