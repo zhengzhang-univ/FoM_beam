@@ -4,7 +4,7 @@ from FoM import FoM
 # Read beam files
 beam_file_path = './beam_data_hirax'
 
-test = FoM(400, 800, 201, beam_file_path)
+test = FoM(400, 800, 201, "/Users/zheng/Dropbox/CarlaShareSept2022/Data 02_09_2022/")
 
 test.FoM()
 

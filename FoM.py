@@ -1,12 +1,20 @@
-
 import numpy as np
 from scipy.fft import dctn, fftn, fftshift, fftfreq
 from scipy.io import loadmat
+from scipy.interpolate import griddata
 
 from cora.signal import corr21cm
 from cora.foreground import gaussianfg, galaxy
 from cora.util import units
 
+from mpiutil import parallel_map
+
+
+def rad2deg(a):
+    return a * 180. / np.pi
+
+def deg2rad(a):
+    return a * np.pi / 180.
 
 class PointSources(gaussianfg.PointSources):
     """Scale up point source amplitude to a higher S_{cut} = 0.1 Jy"""
@@ -27,42 +35,96 @@ class FoM:
         # Polarization version or not
         self.polarized = polarized
         self.frequency_window = np.sin(np.pi*self.xs)**4
-        # Beam Intensity
-        self.BeamPath = beam_file_path
-        self.BeamErr = self.Beam*0.2
-        self.fft_coordinates()
+        self.beam_file_path = beam_file_path
+        self.spatial_treatments()
+        self.fft()
+        print("The Beam FoM object has been initialized! \n")
 
-    def fft_coordinates(self):
+    def spatial_treatments(self):
+        theta_max = deg2rad(75)
+        E1 = loadmat(self.beam_file_path+'E1_S.mat')['E1_S']
+        self.nfreq = E1.shape[-1]
+        assert self.nfreq == len(self.frequencies)
+        Valind = loadmat(self.beam_file_path+'ValInd.mat')['valInd'].flatten()
+        theta = loadmat(self.beam_file_path+'th.mat')['th'].flatten()[Valind] # in radians
+        phi = loadmat(self.beam_file_path+'ph.mat')['ph'].flatten()[Valind] # in radians
+        radius = 2.*np.tan(theta_max/2.)
+        # Interpolate:
+        x, y = self.sphere2plane(theta,phi)
+        points = np.column_stack((x,y))
+        grid_x, grid_y = np.mgrid[-radius:radius:301j, -radius:radius:301j]
+        E1 = self.interpolation(points, E1, grid_x, grid_y)
+        theta_coord, phi_coord = self.plane2sphere(grid_x.flatten(), grid_y.flatten())
+        theta_coord = theta_coord.reshape(grid_x.shape)
+        E1 = self.directional_window(E1, theta_coord, theta_max)
+        self.beam_intensity = self.field2scaledintensity(E1, theta_coord)
+        E1 = loadmat(self.beam_file_path+'E1_S_Error.mat')['E1_S']
+        E1 = self.interpolation(points, E1, grid_x, grid_y)
+        E1 = self.directional_window(E1, theta_coord, theta_max)
+        self.beam_err_intensity = self.field2scaledintensity(E1, theta_coord)
+        self.x_coord, self.y_coord = np.unique(grid_x), np.unique(grid_y)
+
+    def field2scaledintensity(self, E_field, theta_coord):
+        intensity_rescaling_factor = np.cos(theta_coord) ** 5 / (np.cos(theta_coord) - np.sin(theta_coord))
+        beam_intensity = intensity_rescaling_factor[:, :, np.newaxis] * (1 / 376.730313668) * np.abs(E_field) ** 2
+        return beam_intensity
+
+    def sphere2plane(self, theta, phi):
+        x = 2. * np.sin(theta) * np.cos(phi) / (1. + np.cos(theta))
+        y = 2. * np.sin(theta) * np.sin(phi) / (1. + np.cos(theta))
+        return x,y
+
+    def plane2sphere(self, x, y):
+        phi = np.zeros(x.shape)
+        for i in np.arange(x.shape[0]):
+            if x[i] > 0.:
+                phi[i] = np.arctan(y[i] / x[i])
+            elif x[i] < 0.:
+                phi[i] = np.arctan(y[i] / x[i]) + np.pi
+            else:
+                if y[i] > 0.:
+                    phi[i] = np.pi / 2.
+                elif y[i] < 0.:
+                    phi[i] = - np.pi / 2.
+        theta = 2.*np.arctan(np.sqrt(x**2+y**2)/2.)
+        return theta, phi
+
+    def directional_window(self, E_field, theta_coords, theta_max=75., alpha=0.05):
+        for i in range(theta_coords.shape[0]):
+            for j in range(theta_coords.shape[1]):
+                if theta_coords[i,j] < theta_max:
+                    E_field[i, j, :] *= np.exp(-alpha*(1/(theta_coords[i,j]-theta_max)**2 - 1/theta_max**2))
+                else:
+                    E_field[i, j, :] = 0.
+        return E_field
+
+    def interpolation(self, points, E_field, grid_x, grid_y):
+        x, y = grid_x.shape
+        E_interpolated = np.zeros(shape=(x, y, self.nfreq))
+        for nu in range(self.nfreq):
+            E_interpolated[:, :, nu] = griddata(points, E_field[:, nu], (grid_x, grid_y), method='cubic')
+        return E_interpolated
+
+    def fft(self):
         # frequency FT coordinates
         self.frequency_FT_coords = fftshift(fftfreq(self.frequencies.size, d=self.frequencies[1] - self.frequencies[0]))
 
-        # Beam Coordinates
-        xgrid = loadmat('{:s}/XXint_hirax.mat'.format(self.BeamPath))['XXint']
-        ygrid = loadmat('{:s}/YYint_hirax.mat'.format(self.BeamPath))['YYint']
-        # Projected beam coordinates in image space (x, y) = (theta_x, theta_y) in radians
-        x_coords = np.unique(xgrid)
-        y_coords = np.unique(ygrid)
+
         # Beam pixel resolutions
-        x_res = np.abs(x_coords[1] - x_coords[0])
-        y_res = np.abs(y_coords[1] - y_coords[0])
+        x_res = np.abs(self.x_coord[1] - self.x_coord[0])
+        y_res = np.abs(self.y_coord[1] - self.y_coord[0])
         # Projected beam coordinates in Fourier space (x_fft, y_fft) = (ell_x, ell_y)
-        self.x_fft_coords = fftshift(fftfreq(x_coords.size, d=x_res))
-        self.y_fft_coords = fftshift(fftfreq(y_coords.size, d=y_res))
+        self.x_fft_coords = fftshift(fftfreq(self.x_coord.size, d=x_res))
+        self.y_fft_coords = fftshift(fftfreq(self.y_coord.size, d=y_res))
 
-        Beam = loadmat('{:s}/u_freq_cube_hirax.mat'.format(self.BeamPath))['U_FreqCube']
-        BeamErr = Beam * 0.2 # TBD
-        self.Beam = self.directional_window(Beam, x_coords, y_coords)
-        self.BeamErr = self.directional_window(BeamErr, x_coords, y_coords)
-
-        Beam_fft = fftn(self.Beam, axes=(0, 1))
-        Beam_err_fft = fftn(self.BeamErr, axes=(0, 1))
+        Beam_fft = fftn(self.beam_intensity, axes=(0, 1))
+        Beam_err_fft = fftn(self.beam_err_intensity, axes=(0, 1))
         self.Beam_fft_shift = fftshift(Beam_fft, axes=(0, 1))
         Beam_err_fft_shift = fftshift(Beam_err_fft, axes=(0, 1))
-        self.Fractional_beam_err = Beam_err_fft_shift / self.Beam_fft_shift
+        self.fractional_beam_err_k = Beam_err_fft_shift / self.Beam_fft_shift
         # Grid version
         y_fft_grid, x_fft_grid = np.meshgrid(self.x_fft_coords, self.y_fft_coords)
         self.k_perp_array = x_fft_grid +1j*y_fft_grid
-
 
     def k_to_l_flatsky(self, k_perp):
         return 2 * np.pi * np.absolute(k_perp)
@@ -121,38 +183,25 @@ class FoM:
         T_sys = self.t_sys(self.frequencies)
         return np.diag((T_sys/np.abs(self.Beam_fft_shift[i, j])) ** 2 / (units.t_sidereal * self.ndays * bw))
 
-    def directional_window(self, Beam, x_coords, y_coords, theta_max=75., alpha=0.05):
-        def radian_to_degree(a):
-            return a*180./(2*np.pi)
-
-        for i in range(x_coords.size):
-            for j in range(y_coords.size):
-                theta = np.sqrt(radian_to_degree(x_coords[i])**2
-                                + radian_to_degree(y_coords[j])**2)
-                if theta > theta_max:
-                    Beam[i, j, :] = 0.
-                else:
-                    Beam[i, j, :] *= np.exp(-alpha*(1/(theta-theta_max)**2 - 1/theta_max**2))
-        return Beam
-
-
-
     def spectral_window(self, data_array):
         sin_x = np.sin(self.xs * np.pi)
         W = np.outer(sin_x, sin_x)
         return data_array * W
 
     def Dct(self, data_array):
-        return dctn(data_array, axes = (-2,-1) )
+        return dctn(data_array, axes = (-2,-1))
 
-    def P_ab_at_a_k_perp(self, i, j, SNR_only = False):
+    def P_ab_at_a_k_perp(self, i, j, SNR_only = False, include_1st_order = True):
         k_perp = self.x_fft_coords[i] + 1j * self.y_fft_coords[j]
         cl_21 = self.clarray_21cm(k_perp)
         P_ab_21 = self.Dct(self.spectral_window(cl_21))
         cl_fg = self.clarray_fg(k_perp)
         P_ab_fg = self.Dct(self.spectral_window(cl_fg))
-        x2_grid, x1_grid = np.meshgrid(self.Fractional_beam_err[i, j].conj(), self.Fractional_beam_err[i, j])
-        aux = (x2_grid + x1_grid + x2_grid * x1_grid) * (cl_21 + cl_fg)
+        x2_grid, x1_grid = np.meshgrid(self.fractional_beam_err_k[i, j].conj(), self.fractional_beam_err_k[i, j])
+        if include_1st_order:
+            aux = (x2_grid + x1_grid + x2_grid * x1_grid) * (cl_21 + cl_fg)
+        else:
+            aux = x2_grid * x1_grid * (cl_21 + cl_fg)
         P_ab_beam = self.Dct(self.spectral_window(aux))
         x2_grid, x1_grid = np.meshgrid(self.Beam_fft_shift[i, j].conj(), self.Beam_fft_shift[i, j])
         aux = self.ps_noise_ij(i, j) / (x2_grid * x1_grid)
@@ -163,13 +212,16 @@ class FoM:
         else:
             return P_ab_21, P_ab_fg, P_ab_beam, P_ab_noise, SNR
 
-    def SNR_at_a_k_perp(self, i, j):
+    def SNR_at_a_k_perp(self, i, j, include_1st_order = False):
         k_perp = self.x_fft_coords[i] + 1j * self.y_fft_coords[j]
         cl_21 = self.clarray_21cm(k_perp)
         P_ab_21 = self.Dct(self.spectral_window(cl_21))
         cl_noise = self.clarray_fg(k_perp).astype(complex)
-        x2_grid, x1_grid = np.meshgrid(self.Fractional_beam_err[i, j].conj(), self.Fractional_beam_err[i, j])
-        cl_noise += (x2_grid + x1_grid + x2_grid * x1_grid) * (cl_21 + cl_noise)
+        x2_grid, x1_grid = np.meshgrid(self.fractional_beam_err_k[i, j].conj(), self.fractional_beam_err_k[i, j])
+        if include_1st_order:
+            cl_noise += (x2_grid + x1_grid + x2_grid * x1_grid) * (cl_21 + cl_noise)
+        else:
+            cl_noise += (x2_grid * x1_grid) * (cl_21 + cl_noise)
         x2_grid, x1_grid = np.meshgrid(self.Beam_fft_shift[i, j].conj(), self.Beam_fft_shift[i, j])
         cl_noise += self.ps_noise_ij(i, j) / (x2_grid * x1_grid)
         P_ab_noise = self.Dct(self.spectral_window(cl_noise))
@@ -180,8 +232,10 @@ class FoM:
         ysize = self.y_fft_coords.size
         SNR = 0.
         for i in np.arange(xsize):
-            for j in np.arange(ysize):
-                SNR += self.SNR_at_a_k_perp(i, j)
+            def func(j):
+                return self.SNR_at_a_k_perp(i,j)
+            aux = parallel_map(func, list(np.arange(ysize)))
+            SNR += sum(aux)
         return SNR
 
 
