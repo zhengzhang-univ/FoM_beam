@@ -6,7 +6,9 @@ beam_file_path = './beam_data_hirax'
 
 test = FoM(400, 800, 201, "/Users/zheng/Dropbox/CarlaShareSept2022/Data 02_09_2022/")
 
-test.FoM()
+figure_of_merit = test.FoM()
+
+print("FoM is " + figure_of_merit + ", done!")
 
 def print_hi(name):
     # 在下面的代码行中使用断点来调试脚本。
