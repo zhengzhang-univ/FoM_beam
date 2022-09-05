@@ -1,14 +1,17 @@
 from FoM import FoM
+import time
 
-
+t1 = time.time()
 # Read beam files
-beam_file_path = './beam_data_hirax'
+beam_file_path = './'
 
-test = FoM(400, 800, 201, "/Users/zheng/Dropbox/CarlaShareSept2022/Data 02_09_2022/")
+test = FoM(400, 800, 201, beam_file_path)
 
 figure_of_merit = test.FoM()
 
-print("FoM is " + figure_of_merit + ", done!")
+t2 = time.time()
+print("FoM is {}!\n".format(figure_of_merit))
+print("Elapsed time {}".format(t2-t1))
 
 def print_hi(name):
     # 在下面的代码行中使用断点来调试脚本。
