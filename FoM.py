@@ -212,22 +212,6 @@ class FoM:
         else:
             return P_ab_21, P_ab_fg, P_ab_beam, P_ab_noise, SNR
 
-    def SNR_at_a_k_perp(self, i, j, include_1st_order = False):
-        k_perp = self.x_fft_coords[i] + 1j * self.y_fft_coords[j]
-        cl_21 = self.clarray_21cm(k_perp)
-        P_ab_21 = self.Dct(self.spectral_window(cl_21))
-        cl_fg = self.clarray_fg(k_perp)
-        P_ab_fg = self.Dct(self.spectral_window(cl_fg))
-        x2_grid, x1_grid = np.meshgrid(self.fractional_beam_err_k[i, j].conj(), self.fractional_beam_err_k[i, j])
-        if include_1st_order:
-            aux = (x2_grid + x1_grid + x2_grid * x1_grid) * (cl_21 + cl_fg)
-        else:
-            aux = (x2_grid * x1_grid) * (cl_21 + cl_fg)
-        x2_grid, x1_grid = np.meshgrid(self.Beam_fft_shift[i, j].conj(), self.Beam_fft_shift[i, j])
-        aux += self.ps_noise_ij(i, j) / (x2_grid * x1_grid) + cl_fg
-        P_ab_noise = self.Dct(self.spectral_window(cl_fg + ))
-        return np.trace(np.abs(P_ab_21/P_ab_noise))
-
     def FoM(self, if_1st_order=False):
         xsize = self.x_fft_coords.size
         ysize = self.y_fft_coords.size
