@@ -1,3 +1,4 @@
+import mpiutil
 from FoM import FoM
 import time
 
@@ -8,12 +9,13 @@ beam_file_path = '../'
 test = FoM(400, 800, 201, beam_file_path)
 
 figure_of_merit_1 = test.FoM(include_1st_order = True)
-figure_of_merit_2 = test.FoM(include_1st_order = False)
+figure_of_merit = test.FoM(include_1st_order = False)
 
 t2 = time.time()
-print("FoM with the first order term is {}!\n".format(figure_of_merit_1))
-print("FoM w/o the first order term is {}!\n".format(figure_of_merit_2))
-print("Elapsed time {}".format(t2-t1))
+if mpiutil.rank0:
+    print("FoM with the first order term is\n {}!\n".format(figure_of_merit_1))
+    print("FoM w/o the first order term is\n {}!\n".format(figure_of_merit))
+    print("Elapsed time {}".format(t2-t1))
 
 
 def print_hi(name):
