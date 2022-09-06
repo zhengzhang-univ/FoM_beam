@@ -8,8 +8,8 @@ beam_file_path = '../'
 
 test = FoM(400, 800, 201, beam_file_path)
 
-figure_of_merit_1 = test.FoM(include_1st_order = True)
-figure_of_merit = test.FoM(include_1st_order = False)
+figure_of_merit_1 = test.FoM(if_1st_order = True)
+figure_of_merit = test.FoM(if_1st_order = False)
 
 t2 = time.time()
 if mpiutil.rank0:
