@@ -225,7 +225,7 @@ class FoM:
         x2_grid, x1_grid = np.meshgrid(self.Beam_fft_shift[i, j].conj(), self.Beam_fft_shift[i, j])
         cl_noise += self.ps_noise_ij(i, j) / (x2_grid * x1_grid)
         P_ab_noise = self.Dct(self.spectral_window(cl_noise))
-        return np.sum(np.abs(P_ab_21/P_ab_noise))
+        return np.trace(np.abs(P_ab_21/P_ab_noise))
 
     def FoM(self, include_1st_order = False):
         xsize = self.x_fft_coords.size
