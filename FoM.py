@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.fft import dctn, fftn, fftshift, fftfreq
+from scipy.fftpack import dctn, fftn, fftshift, fftfreq
 from scipy.io import loadmat
 from scipy.interpolate import griddata
 
@@ -227,16 +227,15 @@ class FoM:
         P_ab_noise = self.Dct(self.spectral_window(cl_noise))
         return np.sum(np.abs(P_ab_21/P_ab_noise))
 
-    def FoM(self):
+    def FoM(self, include_1st_order = False):
         xsize = self.x_fft_coords.size
         ysize = self.y_fft_coords.size
-        SNR = 0.
-        for i in np.arange(xsize):
-            def func(j):
-                return self.SNR_at_a_k_perp(i,j)
-            aux = parallel_map(func, list(np.arange(ysize)))
-            SNR += sum(aux)
-        return SNR
+        def func(i):
+            return self.SNR_at_a_k_perp(i, i, include_1st_order)
+        # for i in np.arange(xsize):
+        aux = parallel_map(func, list(np.arange(ysize)))
+        FoM = sum(aux)
+        return FoM
 
 
 

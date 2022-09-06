@@ -3,14 +3,16 @@ import time
 
 t1 = time.time()
 # Read beam files
-beam_file_path = './'
+beam_file_path = '../'
 
 test = FoM(400, 800, 201, beam_file_path)
 
-figure_of_merit = test.FoM()
+figure_of_merit_1 = test.FoM(include_1st_order = True)
+figure_of_merit_2 = test.FoM(include_1st_order = False)
 
 t2 = time.time()
-print("FoM is {}!\n".format(figure_of_merit))
+print("FoM with the first order term is {}!\n".format(figure_of_merit_1))
+print("FoM w/o the first order term is {}!\n".format(figure_of_merit_2))
 print("Elapsed time {}".format(t2-t1))
 
 
