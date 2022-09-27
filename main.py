@@ -9,14 +9,13 @@ beam_file_path = '../'
 
 test = FoM(400, 800, 201, beam_file_path)
 
-figure_of_merit_1 = test.FoM(if_1st_order=True)
-figure_of_merit = test.FoM(if_1st_order=False)
+SNRs = test.FoM()
 
 t2 = time.time()
 if mpiutil.rank0:
-    print("FoM with the first order term is\n {}!\n".format(figure_of_merit_1))
-    print("FoM w/o the first order term is\n {}!\n".format(figure_of_merit))
-    print("FoM w/o the first order term is {} in total!\n".format(np.sum(figure_of_merit)))
+    print("The FoM for different k modes are\n {}!\n".format(SNRs.sum()))
+    np.set_printoptions(threshold=np.inf)
+    print(SNRs)
     print("Elapsed time {}".format(t2-t1))
 
 

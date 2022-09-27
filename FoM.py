@@ -10,12 +10,6 @@ from cora.util import units
 from mpiutil import parallel_map
 
 
-def rad2deg(a):
-    return a * 180. / np.pi
-
-def deg2rad(a):
-    return a * np.pi / 180.
-
 class PointSources(gaussianfg.PointSources):
     """Scale up point source amplitude to a higher S_{cut} = 0.1 Jy"""
     A = 3.55e-5
@@ -34,42 +28,50 @@ class FoM:
         self.xs = (self.frequencies - nu_min) / (nu_max - nu_min)
         # Polarization version or not
         self.polarized = polarized
-        self.frequency_window = np.sin(np.pi*self.xs)**4
+        self.frequency_window = np.sin(np.pi*self.xs)**4 # frequency window function
         self.beam_file_path = beam_file_path
         self.spatial_treatments()
         self.fft()
         print("The Beam FoM object has been initialized! \n")
 
-    def spatial_treatments(self):
-        theta_max = deg2rad(75)
+    def spatial_treatments(self, Ndim=301):
+        theta_max = np.deg2rad(75)
         E1 = loadmat(self.beam_file_path+'E1_S.mat')['E1_S']
         self.nfreq = E1.shape[-1]
         assert self.nfreq == len(self.frequencies)
         Valind = loadmat(self.beam_file_path+'ValInd.mat')['valInd'].flatten()
         theta = loadmat(self.beam_file_path+'th.mat')['th'].flatten()[Valind] # in radians
         phi = loadmat(self.beam_file_path+'ph.mat')['ph'].flatten()[Valind] # in radians
+
         radius = 2.*np.tan(theta_max/2.)
         # Interpolate:
-        x, y = self.sphere2plane(theta,phi)
+        x, y = self.sphere2plane(theta,phi) # projecting to the flat sky
         points = np.column_stack((x,y))
-        grid_x, grid_y = np.mgrid[-radius:radius:301j, -radius:radius:301j]
+        self.x_coord, self.y_coord = np.linspace(-radius,radius, Ndim), np.linspace(-radius,radius, Ndim)
+        grid_y, grid_x = np.meshgrid(self.x_coord, self.y_coord)
         E1 = self.interpolation(points, E1, grid_x, grid_y)
+        # Rescaling power density for the projected field
         theta_coord, phi_coord = self.plane2sphere(grid_x.flatten(), grid_y.flatten())
         theta_coord = theta_coord.reshape(grid_x.shape)
-        E1 = self.directional_window(E1, theta_coord, theta_max)
-        self.beam_intensity = self.field2scaledintensity(E1, theta_coord)
+        beam_intensity = self.field2scaledintensity(E1, theta_coord) # projecting the
+        # Apply the directional window
+        self.beam_intensity = self.directional_window(beam_intensity, theta_coord, theta_max) # apply the directional window
+
+        # interpolate, rescale, and apodize the beam error.
         E1 = loadmat(self.beam_file_path+'E1_S_Error.mat')['E1_S']
         E1 = self.interpolation(points, E1, grid_x, grid_y)
-        E1 = self.directional_window(E1, theta_coord, theta_max)
-        self.beam_err_intensity = self.field2scaledintensity(E1, theta_coord)
-        self.x_coord, self.y_coord = np.unique(grid_x), np.unique(grid_y)
+        beam_err_intensity = self.field2scaledintensity(E1, theta_coord)
+        self.beam_err_intensity = self.directional_window(beam_err_intensity, theta_coord, theta_max)
+        return
 
     def field2scaledintensity(self, E_field, theta_coord):
-        intensity_rescaling_factor = np.cos(theta_coord) ** 5 / (np.cos(theta_coord) - np.sin(theta_coord))
-        beam_intensity = intensity_rescaling_factor[:, :, np.newaxis] * (1 / 376.730313668) * np.abs(E_field) ** 2
+        aux_theta = theta_coord/2.
+        intensity_rescaling_factor = np.cos(aux_theta) ** 5 / (np.cos(aux_theta) - np.sin(aux_theta))
+        beam_intensity = intensity_rescaling_factor[:, :, np.newaxis] * np.abs(E_field) ** 2
         return beam_intensity
 
     def sphere2plane(self, theta, phi):
+        # Projection function for the flat-sky approximation.
         x = 2. * np.sin(theta) * np.cos(phi) / (1. + np.cos(theta))
         y = 2. * np.sin(theta) * np.sin(phi) / (1. + np.cos(theta))
         return x,y
@@ -109,7 +111,6 @@ class FoM:
         # frequency FT coordinates
         self.frequency_FT_coords = fftshift(fftfreq(self.frequencies.size, d=self.frequencies[1] - self.frequencies[0]))
 
-
         # Beam pixel resolutions
         x_res = np.abs(self.x_coord[1] - self.x_coord[0])
         y_res = np.abs(self.y_coord[1] - self.y_coord[0])
@@ -123,7 +124,7 @@ class FoM:
         Beam_err_fft_shift = fftshift(Beam_err_fft, axes=(0, 1))
         self.fractional_beam_err_k = Beam_err_fft_shift / self.Beam_fft_shift
         # Grid version
-        y_fft_grid, x_fft_grid = np.meshgrid(self.x_fft_coords, self.y_fft_coords)
+        # y_fft_grid, x_fft_grid = np.meshgrid(self.x_fft_coords, self.y_fft_coords)
         # self.k_perp_array = x_fft_grid +1j*y_fft_grid
 
     def k_to_l_flatsky(self, k_perp):
@@ -189,44 +190,34 @@ class FoM:
         return data_array * W
 
     def Dct(self, data_array):
-        return dctn(data_array, axes = (-2,-1))
+        return dctn(data_array, axes=(-2, -1))
 
-    def P_ab_at_a_k_perp(self, i, j, SNR_only = False, include_1st_order = False):
+    def P_ab_at_a_k_perp(self, i, j):
         k_perp = self.x_fft_coords[i] + 1j * self.y_fft_coords[j]
         cl_21 = self.clarray_21cm(k_perp)
         P_ab_21 = self.Dct(self.spectral_window(cl_21))
         cl_fg = self.clarray_fg(k_perp)
         P_ab_fg = self.Dct(self.spectral_window(cl_fg))
         x2_grid, x1_grid = np.meshgrid(self.fractional_beam_err_k[i, j].conj(), self.fractional_beam_err_k[i, j])
-        if include_1st_order:
-            aux = (x2_grid + x1_grid + x2_grid * x1_grid) * (cl_21 + cl_fg)
-        else:
-            aux = x2_grid * x1_grid * (cl_21 + cl_fg)
+        aux = x2_grid * x1_grid * (cl_21 + cl_fg)
         P_ab_beam = self.Dct(self.spectral_window(aux))
         x2_grid, x1_grid = np.meshgrid(self.Beam_fft_shift[i, j].conj(), self.Beam_fft_shift[i, j])
         aux = self.ps_noise_ij(i, j) / (x2_grid * x1_grid)
         P_ab_noise = self.Dct(self.spectral_window(aux))
-        SNR = np.trace(P_ab_21/(P_ab_fg + np.abs(P_ab_beam) + np.abs(P_ab_noise)))
-        if SNR_only:
-            return SNR
-        else:
-            return P_ab_21, P_ab_fg, P_ab_beam, P_ab_noise, SNR
+        return P_ab_21, P_ab_fg, P_ab_beam, P_ab_noise
 
-    def FoM(self, if_1st_order=False):
+    def SNR_at_a_k_perp(self, i, j):
+        P_ab_21, P_ab_fg, P_ab_beam, P_ab_noise = self.P_ab_at_a_k_perp(i, j)
+        SNR = np.sum(np.diag(P_ab_21)/np.diag(P_ab_fg + P_ab_beam + P_ab_noise).real)
+        return SNR
+
+    def FoM(self):
         xsize = self.x_fft_coords.size
         ysize = self.y_fft_coords.size
         SNR_array = np.zeros((xsize, ysize))
         for i in np.arange(xsize):
             def func(j):
-                return self.P_ab_at_a_k_perp(i, j, SNR_only=True, include_1st_order=if_1st_order)
+                return self.SNR_at_a_k_perp(i, j)
             SNR_array[i,:] = np.array(parallel_map(func, list(np.arange(ysize))))
         return SNR_array
-
-
-
-
-
-
-
-
 
