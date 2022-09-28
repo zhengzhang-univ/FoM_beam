@@ -1,8 +1,7 @@
 """
 This module is a cut from 'radiocosmology/caput/caput/mpiutil.py'
 Here is the link: https://github.com/radiocosmology/caput/blob/master/caput/mpiutil.py
-For convenience, I extracted the functions that need to be used, without installing the whole caput.
-Many thanks to the developers of caput!
+For convenience, I extracted needed functions rather than installing the whole caput.
 """
 import numpy as np
 import logging
