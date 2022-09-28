@@ -58,14 +58,17 @@ class FoM:
         # Rescaling power density for the projected field
         theta_coord, phi_coord = self.plane2sphere(grid_x.flatten(), grid_y.flatten())
         theta_coord = theta_coord.reshape(grid_x.shape)
-        beam_intensity = self.field2scaledintensity(E1, theta_coord) # projecting the
+        beam_intensity = self.field2scaledintensity(E1, theta_coord)
+        # Normalize the beam
+        normalization_factor = self.nfreq / np.linalg.norm( beam_intensity )
+        beam_intensity *= normalization_factor
         # Apply the directional window
         self.beam_intensity = self.directional_window(beam_intensity, theta_coord, theta_max) # apply the directional window
 
         # interpolate, rescale, and apodize the beam error.
         E1 = loadmat(self.beam_file_path+'E1_S_Error.mat')['E1_S']
         E1 = self.interpolation(points, E1, grid_x, grid_y)
-        beam_err_intensity = self.field2scaledintensity(E1, theta_coord)
+        beam_err_intensity = self.field2scaledintensity(E1, theta_coord) * normalization_factor
         self.beam_err_intensity = self.directional_window(beam_err_intensity, theta_coord, theta_max)
         return
 
