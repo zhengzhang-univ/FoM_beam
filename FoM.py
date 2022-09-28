@@ -35,6 +35,11 @@ class FoM:
         print("The Beam FoM object has been initialized! \n")
 
     def spatial_treatments(self, Ndim=301):
+        # This function perform all spatial treatments on the beam, including
+        #       1. map spherical coordinates to (x,y) coordinates on the flat sky
+        #       2. Define a (x,y) grid.  Interpolate the E field on it.
+        #       3. Generate the beam intensity and rescale it to fit the flat sky approximation.
+        #       4. Apply the spatial window function to the beam pattern.
         theta_max = np.deg2rad(75)
         E1 = loadmat(self.beam_file_path+'E1_S.mat')['E1_S']
         self.nfreq = E1.shape[-1]
@@ -45,7 +50,7 @@ class FoM:
 
         radius = 2.*np.tan(theta_max/2.)
         # Interpolate:
-        x, y = self.sphere2plane(theta,phi) # projecting to the flat sky
+        x, y = self.sphere2plane(theta,phi)
         points = np.column_stack((x,y))
         self.x_coord, self.y_coord = np.linspace(-radius,radius, Ndim), np.linspace(-radius,radius, Ndim)
         grid_y, grid_x = np.meshgrid(self.x_coord, self.y_coord)
@@ -71,12 +76,13 @@ class FoM:
         return beam_intensity
 
     def sphere2plane(self, theta, phi):
-        # Projection function for the flat-sky approximation.
+        # Function to project the spherical coordinates to the flat-sky coordinates.
         x = 2. * np.sin(theta) * np.cos(phi) / (1. + np.cos(theta))
         y = 2. * np.sin(theta) * np.sin(phi) / (1. + np.cos(theta))
         return x,y
 
     def plane2sphere(self, x, y):
+        # Function mapping the flat-sky coordinates to the spherical coordinates.
         phi = np.zeros(x.shape)
         for i in np.arange(x.shape[0]):
             if x[i] > 0.:
@@ -108,6 +114,8 @@ class FoM:
         return E_interpolated
 
     def fft(self):
+        # This is the function performing FFT on the beam and beam error over spatial degrees of freedom.
+
         # frequency FT coordinates
         self.frequency_FT_coords = fftshift(fftfreq(self.frequencies.size, d=self.frequencies[1] - self.frequencies[0]))
 
