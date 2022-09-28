@@ -193,17 +193,22 @@ class FoM:
         return dctn(data_array, axes=(-2, -1))
 
     def P_ab_at_a_k_perp(self, i, j):
+        # Forbidden case: x_fft_coords[i] = y_fft_coords[j] = 0
         k_perp = self.x_fft_coords[i] + 1j * self.y_fft_coords[j]
         cl_21 = self.clarray_21cm(k_perp)
         P_ab_21 = self.Dct(self.spectral_window(cl_21))
-        cl_fg = self.clarray_fg(k_perp)
-        P_ab_fg = self.Dct(self.spectral_window(cl_fg))
-        x2_grid, x1_grid = np.meshgrid(self.fractional_beam_err_k[i, j].conj(), self.fractional_beam_err_k[i, j])
-        aux = x2_grid * x1_grid * (cl_21 + cl_fg)
-        P_ab_beam = self.Dct(self.spectral_window(aux))
-        x2_grid, x1_grid = np.meshgrid(self.Beam_fft_shift[i, j].conj(), self.Beam_fft_shift[i, j])
-        aux = self.ps_noise_ij(i, j) / (x2_grid * x1_grid)
-        P_ab_noise = self.Dct(self.spectral_window(aux))
+        if k_perp == 0.:
+            P_ab_21 = np.zeros(shape=P_ab_21.shape)
+            P_ab_fg, P_ab_beam, P_ab_noise = np.ones((3,)+P_ab_21.shape)
+        else:
+            cl_fg = self.clarray_fg(k_perp)
+            P_ab_fg = self.Dct(self.spectral_window(cl_fg))
+            x2_grid, x1_grid = np.meshgrid(self.fractional_beam_err_k[i, j].conj(), self.fractional_beam_err_k[i, j])
+            aux = x2_grid * x1_grid * (cl_21 + cl_fg)
+            P_ab_beam = self.Dct(self.spectral_window(aux))
+            x2_grid, x1_grid = np.meshgrid(self.Beam_fft_shift[i, j].conj(), self.Beam_fft_shift[i, j])
+            aux = self.ps_noise_ij(i, j) / (x2_grid * x1_grid)
+            P_ab_noise = self.Dct(self.spectral_window(aux))
         return P_ab_21, P_ab_fg, P_ab_beam, P_ab_noise
 
     def SNR_at_a_k_perp(self, i, j):
