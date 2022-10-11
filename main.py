@@ -9,13 +9,15 @@ beam_file_path = '../'
 
 test = FoM(400, 800, 201, beam_file_path)
 
-SNRs = test.FoM()
+fom1 = test.FoM()
+
+fom2 = test.FoM_v2()
 
 t2 = time.time()
 if mpiutil.rank0:
-    print("The FoM for different k modes are\n {}!\n".format(SNRs.sum()))
-    np.set_printoptions(threshold=np.inf)
-    print(SNRs)
+    print("The FoM (version1) is {}!\n".format(fom1))
+    # np.set_printoptions(threshold=np.inf)
+    print("The FoM (version2) is {}!\n".format(fom2))
     print("Elapsed time {}".format(t2-t1))
 
 

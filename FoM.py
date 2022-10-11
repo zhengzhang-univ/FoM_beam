@@ -242,16 +242,33 @@ class FoM:
 
     def SNR_at_a_k_perp(self, i, j):
         P_ab_21, P_ab_fg, P_ab_beam, P_ab_noise = self.P_ab_at_a_k_perp(i, j)
-        SNR = np.sum(np.diag(P_ab_21)/np.diag(P_ab_fg + P_ab_beam + P_ab_noise).real)
-        return SNR
+        SNR = np.sum(np.diag(P_ab_21)/np.diag(P_ab_fg + P_ab_noise).real)
+        SNR_bar = np.sum(np.diag(P_ab_21)/np.diag(P_ab_fg + P_ab_beam + P_ab_noise).real)
+        return SNR, SNR_bar
 
     def FoM(self):
         xsize = self.x_fft_coords.size
         ysize = self.y_fft_coords.size
-        SNR_array = np.zeros((xsize, ysize))
+        SNR_array = np.zeros((xsize, ysize, 2))
         for i in np.arange(xsize):
             def func(j):
                 return self.SNR_at_a_k_perp(i, j)
-            SNR_array[i,:] = np.array(parallel_map(func, list(np.arange(ysize))))
-        return SNR_array
+            SNR_array[i, :, :] = np.array(parallel_map(func, list(np.arange(ysize))))
+        return np.sum(SNR_array[:, :, 0])/np.sum(SNR_array[:, :, 1])
+
+
+    def SNR_at_a_k_perp_v2(self, i, j):
+        P_ab_21, P_ab_fg, P_ab_beam, P_ab_noise = self.P_ab_at_a_k_perp(i, j)
+        SNR = np.abs(P_ab_21/(P_ab_fg + P_ab_noise)).sum()
+        SNR_bar = np.abs(P_ab_21/(P_ab_fg + P_ab_beam + P_ab_noise)).sum()
+        return SNR, SNR_bar
+    def FoM_v2(self):
+        xsize = self.x_fft_coords.size
+        ysize = self.y_fft_coords.size
+        SNR_array = np.zeros((xsize, ysize, 2))
+        for i in np.arange(xsize):
+            def func(j):
+                return self.SNR_at_a_k_perp_v2(i, j)
+            SNR_array[i, :, :] = np.array(parallel_map(func, list(np.arange(ysize))))
+        return np.sum(SNR_array[:, :, 0])/np.sum(SNR_array[:, :, 1])
 
