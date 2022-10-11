@@ -1,13 +1,53 @@
 import numpy as np
 from scipy.fftpack import dctn, fftn, fftshift, fftfreq
 from scipy.io import loadmat
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, RectBivariateSpline
 
 from cora.signal import corr21cm
 from cora.foreground import gaussianfg, galaxy
 from cora.util import units
 
 from mpiutil import parallel_map
+
+
+def sphere2plane(theta, phi):
+    x = 2. * np.sin(theta) * np.cos(phi) / (1. + np.cos(theta))
+    y = 2. * np.sin(theta) * np.sin(phi) / (1. + np.cos(theta))
+    return x, y
+
+
+def plane2sphere(x, y):
+    # Function mapping the flat-sky coordinates to the spherical coordinates.
+    phi = np.zeros(x.shape)
+    for i in np.arange(x.shape[0]):
+        if x[i] > 0.:
+            phi[i] = np.arctan(y[i] / x[i])
+        elif x[i] < 0.:
+            phi[i] = np.arctan(y[i] / x[i]) + np.pi
+        else:
+            if y[i] > 0.:
+                phi[i] = np.pi / 2.
+            elif y[i] < 0.:
+                phi[i] = - np.pi / 2.
+    theta = 2. * np.arctan(np.sqrt(x ** 2 + y ** 2) / 2.)
+    return phi, theta
+
+
+def load_beam_files(beam_file_path):
+    E1 = loadmat(beam_file_path + 'E1_S.mat')['E1_S']
+    E1_err = loadmat(beam_file_path + 'E1_S_Error.mat')['E1_S']
+    valind = loadmat(beam_file_path + 'ValInd.mat')['valInd'].flatten()
+    theta = loadmat(beam_file_path + 'th.mat')['th'].flatten()[valind]
+    phi = loadmat(beam_file_path + 'ph.mat')['ph'].flatten()[valind]
+    valind = np.where(np.rad2deg(theta) < 90)[0]
+    E1 = E1[valind]
+    E1_err = E1_err[valind]
+    theta = theta[valind]
+    phi = phi[valind]
+    uni_phi, uni_theta = np.unique(phi), np.unique(theta)
+    nphi, ntheta =len(uni_phi), len(uni_theta)
+    return E1.reshape(nphi, ntheta, -1), E1_err.reshape(nphi, ntheta, -1), \
+           uni_phi, uni_theta
 
 
 class PointSources(gaussianfg.PointSources):
@@ -31,74 +71,52 @@ class FoM:
         self.frequency_window = np.sin(np.pi*self.xs)**4 # frequency window function
         self.beam_file_path = beam_file_path
         self.spatial_treatments()
+        print("The spatial treatments are done! \n")
         self.fft()
+        print("FFT is done! \n")
         print("The Beam FoM object has been initialized! \n")
 
-    def spatial_treatments(self, Ndim=301):
+
+    def spatial_treatments(self, Ndim=301, theta_max=75):
         # This function perform all spatial treatments on the beam, including
         #       1. map spherical coordinates to (x,y) coordinates on the flat sky
         #       2. Define a (x,y) grid.  Interpolate the E field on it.
         #       3. Generate the beam intensity and rescale it to fit the flat sky approximation.
         #       4. Apply the spatial window function to the beam pattern.
-        theta_max = np.deg2rad(75)
-        E1 = loadmat(self.beam_file_path+'E1_S.mat')['E1_S']
+        self.Ndim = Ndim
+        E1, E1_err, phi, theta = load_beam_files(self.beam_file_path)
         self.nfreq = E1.shape[-1]
         assert self.nfreq == len(self.frequencies)
-        Valind = loadmat(self.beam_file_path+'ValInd.mat')['valInd'].flatten()
-        theta = loadmat(self.beam_file_path+'th.mat')['th'].flatten()[Valind] # in radians
-        phi = loadmat(self.beam_file_path+'ph.mat')['ph'].flatten()[Valind] # in radians
 
-        radius = 2.*np.tan(theta_max/2.)
-        # Interpolate:
-        x, y = self.sphere2plane(theta,phi)
-        points = np.column_stack((x,y))
-        self.x_coord, self.y_coord = np.linspace(-radius,radius, Ndim), np.linspace(-radius,radius, Ndim)
+        thetaMax = np.deg2rad(theta_max)
+        radius = 2.*np.tan(thetaMax/2.)
+        self.x_coord, self.y_coord = np.linspace(-radius, radius, Ndim), np.linspace(-radius, radius, Ndim)
         grid_y, grid_x = np.meshgrid(self.x_coord, self.y_coord)
-        E1 = self.interpolation(points, E1, grid_x, grid_y)
+        target_phi, target_theta = plane2sphere(grid_x.flatten(), grid_y.flatten())
+
+        # Interpolation:
+        E1 = self.interpolation(phi, theta, E1, target_phi, target_theta)
         # Rescaling power density for the projected field
-        theta_coord, phi_coord = self.plane2sphere(grid_x.flatten(), grid_y.flatten())
-        theta_coord = theta_coord.reshape(grid_x.shape)
-        beam_intensity = self.field2scaledintensity(E1, theta_coord)
+        grid_target_theta = target_theta.reshape(grid_x.shape)
+        beam_intensity = self.field2scaledintensity(E1, grid_target_theta)
         # Normalize the beam
-        normalization_factor = self.nfreq / np.linalg.norm( beam_intensity )
+        normalization_factor = self.nfreq / np.linalg.norm(beam_intensity)
         beam_intensity *= normalization_factor
         # Apply the directional window
-        self.beam_intensity = self.directional_window(beam_intensity, theta_coord, theta_max) # apply the directional window
+        self.beam_intensity = self.directional_window(beam_intensity, grid_target_theta, theta_max) # apply the directional window
 
         # interpolate, rescale, and apodize the beam error.
-        E1 = loadmat(self.beam_file_path+'E1_S_Error.mat')['E1_S']
-        E1 = self.interpolation(points, E1, grid_x, grid_y)
-        beam_err_intensity = self.field2scaledintensity(E1, theta_coord) * normalization_factor
-        self.beam_err_intensity = self.directional_window(beam_err_intensity, theta_coord, theta_max)
+        E1_err = self.interpolation(phi, theta, E1_err, target_phi, target_theta)
+        beam_err_intensity = self.field2scaledintensity(E1_err, grid_target_theta) * normalization_factor
+        self.beam_err_intensity = self.directional_window(beam_err_intensity, grid_target_theta, theta_max)
         return
+
 
     def field2scaledintensity(self, E_field, theta_coord):
         aux_theta = theta_coord/2.
         intensity_rescaling_factor = np.cos(aux_theta) ** 5 / (np.cos(aux_theta) - np.sin(aux_theta))
         beam_intensity = intensity_rescaling_factor[:, :, np.newaxis] * np.abs(E_field) ** 2
         return beam_intensity
-
-    def sphere2plane(self, theta, phi):
-        # Function to project the spherical coordinates to the flat-sky coordinates.
-        x = 2. * np.sin(theta) * np.cos(phi) / (1. + np.cos(theta))
-        y = 2. * np.sin(theta) * np.sin(phi) / (1. + np.cos(theta))
-        return x,y
-
-    def plane2sphere(self, x, y):
-        # Function mapping the flat-sky coordinates to the spherical coordinates.
-        phi = np.zeros(x.shape)
-        for i in np.arange(x.shape[0]):
-            if x[i] > 0.:
-                phi[i] = np.arctan(y[i] / x[i])
-            elif x[i] < 0.:
-                phi[i] = np.arctan(y[i] / x[i]) + np.pi
-            else:
-                if y[i] > 0.:
-                    phi[i] = np.pi / 2.
-                elif y[i] < 0.:
-                    phi[i] = - np.pi / 2.
-        theta = 2.*np.arctan(np.sqrt(x**2+y**2)/2.)
-        return theta, phi
 
     def directional_window(self, E_field, theta_coords, theta_max=75., alpha=0.05):
         for i in range(theta_coords.shape[0]):
@@ -109,11 +127,11 @@ class FoM:
                     E_field[i, j, :] = 0.
         return E_field
 
-    def interpolation(self, points, E_field, grid_x, grid_y):
-        x, y = grid_x.shape
-        E_interpolated = np.zeros(shape=(x, y, self.nfreq))
+    def interpolation(self, phi, theta, E_field, target_phi, target_theta):
+        E_interpolated = np.zeros(shape=(self.Ndim, self.Ndim, self.nfreq))
         for nu in range(self.nfreq):
-            E_interpolated[:, :, nu] = griddata(points, E_field[:, nu], (grid_x, grid_y), method='cubic')
+            interp = RectBivariateSpline(phi, theta, E_field[:, :, nu])
+            E_interpolated[:, :, nu] = interp(target_phi, target_theta, grid=False).reshape(self.Ndim, self.Ndim)
         return E_interpolated
 
     def fft(self):
