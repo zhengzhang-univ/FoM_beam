@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.fftpack import dctn, fftn, fftshift, fftfreq
 from scipy.io import loadmat
-from scipy.interpolate import griddata, RectBivariateSpline
+from scipy.interpolate import RectBivariateSpline
 
 from cora.signal import corr21cm
 from cora.foreground import gaussianfg, galaxy
@@ -60,7 +60,15 @@ class PointSources(gaussianfg.PointSources):
 class FoM:
     pol_frac = 1.0
     tsys_flat = 50.0
-    ndays = 365.0
+    d_dish = 6.0  # meter
+    eta = 0.75 # dish efficiency
+    ndays = 730.0
+    survey_area = 15000.0
+    FOV = 0.0076    # field of view: 25.0 square degree.
+    num_beams = 2*1024
+    num_pol = 2
+    num_dish = 1024
+    noiseps_factor = (4/(eta*np.pi))**2 * (survey_area/25.0)/(num_pol*num_dish)
 
     def __init__(self, nu_min, nu_max, ndim, beam_file_path, polarized=False):
         self.frequencies = np.linspace(nu_min, nu_max, ndim)
@@ -75,7 +83,6 @@ class FoM:
         self.fft()
         print("FFT is done! \n")
         print("The Beam FoM object has been initialized! \n")
-
 
     def spatial_treatments(self, Ndim=301, theta_max=75):
         # This function perform all spatial treatments on the beam, including
@@ -110,7 +117,6 @@ class FoM:
         beam_err_intensity = self.field2scaledintensity(E1_err, grid_target_theta) * normalization_factor
         self.beam_err_intensity = self.directional_window(beam_err_intensity, grid_target_theta, theta_max)
         return
-
 
     def field2scaledintensity(self, E_field, theta_coord):
         aux_theta = theta_coord/2.
@@ -193,25 +199,11 @@ class FoM:
     def t_sys(self, freq):
         return np.ones_like(freq) * self.tsys_flat
 
-    def ps_noise(self):
-        # In k_perp and frequency coordinates
-        bw = np.abs(self.frequencies[1] - self.frequencies[0]) * 1e6
-        T_sys = self.t_sys(self.frequencies)
-        xsize = self.x_fft_coords.size
-        ysize = self.y_fft_coords.size
-        fsize = self.frequencies.size
-        result = np.zeros((xsize, ysize, fsize, fsize))
-        for i in range(xsize):
-            for j in range(ysize):
-                result[i, j, :, :] = np.diag( (T_sys/np.abs(self.Beam_fft_shift[i,j])) ** 2
-                                              / (units.t_sidereal * self.ndays * bw))
-        return result
-
     def ps_noise_ij(self, i, j):
-        # In k_perp and frequency coordinates
         bw = np.abs(self.frequencies[1] - self.frequencies[0]) * 1e6
         T_sys = self.t_sys(self.frequencies)
-        return np.diag((T_sys/np.abs(self.Beam_fft_shift[i, j])) ** 2 / (units.t_sidereal * self.ndays * bw))
+        return np.diag((T_sys / np.abs(self.Beam_fft_shift[i, j])) ** 2
+                        / (units.t_sidereal * self.ndays * bw)) * self.noiseps_factor
 
     def spectral_window(self, data_array):
         sin_x = np.sin(self.xs * np.pi)
@@ -236,7 +228,8 @@ class FoM:
             aux = x2_grid * x1_grid * (cl_21 + cl_fg)
             P_ab_beam = self.Dct(self.spectral_window(aux))
             x2_grid, x1_grid = np.meshgrid(self.Beam_fft_shift[i, j].conj(), self.Beam_fft_shift[i, j])
-            aux = self.ps_noise_ij(i, j) / (x2_grid * x1_grid)
+            # aux = self.ps_noise_ij(i, j) / (x2_grid * x1_grid)
+            aux = self.ps_noise_ij(i, j)
             P_ab_noise = self.Dct(self.spectral_window(aux))
         return P_ab_21, P_ab_fg, P_ab_beam, P_ab_noise
 
@@ -255,7 +248,6 @@ class FoM:
                 return self.SNR_at_a_k_perp(i, j)
             SNR_array[i, :, :] = np.array(parallel_map(func, list(np.arange(ysize))))
         return np.sum(SNR_array[:, :, 0])/np.sum(SNR_array[:, :, 1])
-
 
     def SNR_at_a_k_perp_v2(self, i, j):
         P_ab_21, P_ab_fg, P_ab_beam, P_ab_noise = self.P_ab_at_a_k_perp(i, j)
